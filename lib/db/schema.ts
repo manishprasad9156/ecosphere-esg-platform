@@ -1,12 +1,15 @@
 import {
   boolean,
   date,
+  index,
   integer,
   numeric,
   pgTable,
   serial,
   text,
   timestamp,
+  unique,
+  uuid,
 } from "drizzle-orm/pg-core"
 
 // ============================================================
@@ -211,6 +214,103 @@ export const wasteLogs = pgTable("waste_logs", {
   notes: text("notes"),
   createdAt: timestamp("createdAt").notNull().defaultNow(),
 })
+
+// ============================================================
+// Module 2: Social — Wellbeing Challenges, Activity Tracking,
+// Peer Verification, Streak Rewards
+// ============================================================
+
+/** Wellbeing challenges employees can participate in (weekly/monthly cycles). */
+export const wellbeingChallenges = pgTable("wellbeing_challenges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  description: text("description"),
+  targetFrequency: integer("targetFrequency").notNull(),
+  cycleType: text("cycleType").notNull().default("weekly"), // weekly | monthly
+  status: boolean("status").notNull().default(true),
+  createdBy: text("createdBy").references(() => user.id, { onDelete: "set null" }),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+})
+
+/** Individual activity entries logged by employees against a challenge. */
+export const activityLogs = pgTable(
+  "activity_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: text("employeeId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    challengeId: uuid("challengeId")
+      .notNull()
+      .references(() => wellbeingChallenges.id, { onDelete: "cascade" }),
+    activityType: text("activityType").notNull(),
+    notes: text("notes"),
+    proofUrl: text("proofUrl"),
+    dateLogged: date("dateLogged").notNull(),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+  },
+  (t) => [
+    index("activity_logs_employee_idx").on(t.employeeId),
+    index("activity_logs_challenge_idx").on(t.challengeId),
+    index("activity_logs_date_idx").on(t.dateLogged),
+  ],
+)
+
+/**
+ * Participation record awaiting peer verification.
+ * source: "activity" (peer-verified) | "weekly_streak" (auto reward).
+ */
+export const employeeParticipations = pgTable(
+  "employee_participations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: text("employeeId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    activityId: uuid("activityId").references(() => activityLogs.id, {
+      onDelete: "cascade",
+    }),
+    proofUrl: text("proofUrl"),
+    approvalStatus: text("approvalStatus").notNull().default("pending"), // pending | approved | rejected
+    pointsEarned: integer("pointsEarned").notNull().default(0),
+    vouchCount: integer("vouchCount").notNull().default(0),
+    source: text("source").notNull().default("activity"), // activity | weekly_streak
+    weekStart: date("weekStart"), // set for weekly_streak rewards (dedupe key)
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+  },
+  (t) => [
+    index("participations_employee_idx").on(t.employeeId),
+    index("participations_status_idx").on(t.approvalStatus),
+    unique("participations_weekly_streak_unique").on(
+      t.employeeId,
+      t.source,
+      t.weekStart,
+    ),
+  ],
+)
+
+/** A peer vouching for a participation. One vouch per employee per participation. */
+export const peerVerifications = pgTable(
+  "peer_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    participationId: uuid("participationId")
+      .notNull()
+      .references(() => employeeParticipations.id, { onDelete: "cascade" }),
+    voucherEmployeeId: text("voucherEmployeeId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+  },
+  (t) => [
+    unique("peer_verifications_unique_vouch").on(
+      t.participationId,
+      t.voucherEmployeeId,
+    ),
+  ],
+)
 
 /** Reduction targets tracked against actuals. */
 export const environmentalGoals = pgTable("environmental_goals", {
